@@ -21,3 +21,5 @@ Khi đã cấu hình, app có nút "Gửi lên hệ thống", tự trả phòng 
 
 ## Tài khoản
 Lần đầu mở app sẽ yêu cầu mã thiết lập để tạo tài khoản quản trị. Quản trị viên thêm/khóa tài khoản nhân viên trong phần Cài đặt.
+
+<!-- build trigger -->
