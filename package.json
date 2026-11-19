@@ -1,6 +1,12 @@
 {
   "name": "luutru-bv",
   "private": true,
-  "scripts": { "deploy": "wrangler deploy", "dev": "wrangler dev" },
-  "devDependencies": { "wrangler": "4.20.0" }
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "build": "echo \"Không cần build: web/ là file tĩnh\""
+  },
+  "devDependencies": {
+    "wrangler": "4.20.0"
+  }
 }
