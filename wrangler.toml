@@ -1,0 +1,15 @@
+name = "cccd"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+workers_dev = true
+
+[assets]
+directory = "./web"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "luutru-bv"
+database_id = "d987d98d-26bd-49cb-9b81-c6ee0c9bd6cc"
+migrations_dir = "migrations"

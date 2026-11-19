@@ -1,0 +1,25 @@
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL DEFAULT '',
+  pass_hash TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'staff',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  token TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS records (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  data TEXT NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  updated_by INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_records_updated ON records(updated_at);
+CREATE TABLE IF NOT EXISTS setup (code TEXT PRIMARY KEY);
