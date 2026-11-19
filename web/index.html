@@ -10540,12 +10540,13 @@ async function buildNNN(list, keep){
 function today(off, base){ const d = base ? new Date(base+"T00:00:00") : new Date(); d.setDate(d.getDate()+(off||0)); const z=n=>String(n).padStart(2,"0"); return d.getFullYear()+"-"+z(d.getMonth()+1)+"-"+z(d.getDate()); }
 function isoToVn(s){ const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(s||""); return m ? m[3]+"/"+m[2]+"/"+m[1] : ""; }
 const DEF = { stayDays:7, reasonBN:"18 - Chữa bệnh", reasonNN:"20 - Mục đích khác", reasonNNText:"Nuôi bệnh", keepVN:true, keepNNN:true, cam:"", zoom:0 };
-let S = { settings:Object.assign({}, DEF), patients:[], people:[] };
+let S = { settings:Object.assign({}, DEF), patients:[], people:[], status:{} };
+let KB = { configured:false };
 try { const st = JSON.parse(localStorage.getItem(KEY+":settings")||"null"); if (st) S.settings = Object.assign({}, DEF, st); } catch(e){}
 function nid(){ try { return crypto.randomUUID().replace(/-/g,""); } catch(e){ return Date.now().toString(36)+Math.random().toString(36).slice(2,12); } }
 let ME = null, cacheKey = null;
 function save(){
-  try { localStorage.setItem(KEY+":settings", JSON.stringify(S.settings)); if (cacheKey) localStorage.setItem(cacheKey, JSON.stringify({patients:S.patients, people:S.people, synced:[...synced], lastSync})); } catch(e){}
+  try { localStorage.setItem(KEY+":settings", JSON.stringify(S.settings)); if (cacheKey) localStorage.setItem(cacheKey, JSON.stringify({patients:S.patients, people:S.people, status:S.status, synced:[...synced], lastSync})); } catch(e){}
   schedulePush();
 }
 /* chuyển dữ liệu bản cũ */
@@ -10595,6 +10596,33 @@ function missingOf(x){
   if (x.arrive && x.leave && x.leave < x.arrive) m.push("ngày đi trước ngày đến");
   return m;
 }
+function sysState(x){
+  const st = S.status[x.id] || {};
+  if (!KB.configured) return x.exported ? ["ok","Đã nộp"] : ["warn","Chưa nộp"];
+  if (st.st !== "ok") return st.st === "err" ? ["bad","Lỗi gửi"] : ["warn","Chưa gửi"];
+  if (st.out) return ["gray","Đã trả phòng"];
+  if (st.outMsg) return ["bad","Lỗi trả phòng"];
+  if (x.leave && st.leave && x.leave > st.leave && !x.left) return ["warn","Cần gia hạn"];
+  return ["ok","Đã gửi"];
+}
+const needSend = (x) => KB.configured && !x.left && (S.status[x.id]||{}).st !== "ok";
+const needExtend = (x) => { const st = S.status[x.id]||{}; return KB.configured && st.st === "ok" && !st.out && !x.left && x.leave && st.leave && x.leave > st.leave; };
+const needCheckout = (x) => { const st = S.status[x.id]||{}; return KB.configured && st.st === "ok" && !st.out && !!x.left; };
+let kbBusy = false;
+async function kbtt(action, ids){
+  if (!ids.length || kbBusy) return;
+  kbBusy = true; toast(({send:"Đang gửi ",checkout:"Đang trả phòng ",extend:"Đang gia hạn "})[action]+ids.length+" người lên hệ thống…");
+  try {
+    clearTimeout(pushT); await push();
+    const d = await apiCall("/api/kbtt/"+action, {method:"POST", body:JSON.stringify({ids})});
+    d.results.forEach(r => { S.status[r.id] = r.status; });
+    save(); render();
+    const bad = d.results.filter(r => !r.ok);
+    if (!bad.length) toast(({send:"Đã gửi ",checkout:"Đã trả phòng ",extend:"Đã gia hạn "})[action]+d.results.length+" người thành công");
+    else { const nm = (id) => ((S.people.find(x => x.id === id)||{}).name||""); toast(bad.length+" người lỗi. "+nm(bad[0].id)+": "+bad[0].error, true); }
+  } catch(e){ if (e.message !== "401") toast("Không gửi được: "+e.message, true); }
+  finally { kbBusy = false; }
+}
 function noteFor(x){ const p = pat(x.pid) || {}; const ba = p.ba ? " - BA "+p.ba : "";
   if (x.role === "BN") return "Bệnh nhân" + ba + (x.note ? " - "+x.note : "");
   return "Người nhà BN " + (p.name||"").toUpperCase() + ba + (x.note ? " - "+x.note : ""); }
@@ -10622,7 +10650,7 @@ function render(){
   $("loading").hidden = true;
   $("home").hidden = view !== "home"; $("pview").hidden = view !== "patient";
   $("backBtn").hidden = view === "home";
-  const pending = S.people.filter(x => !x.exported).length;
+  const pending = KB.configured ? S.people.filter(needSend).length : S.people.filter(x => !x.exported).length;
   $("exportLbl").textContent = pending ? "Xuất file ("+pending+")" : "Xuất file";
   if (view === "home"){
     $("title").textContent = "Lưu trú bệnh viện";
@@ -10659,13 +10687,13 @@ function renderHome(){
     return;
   }
   $("plist").innerHTML = '<div class="list">' + rows.map(p => {
-    const ps = peopleOf(p.id), nn = ps.filter(x => x.role==="NN" && !x.left).length, pend = ps.filter(x => !x.exported).length, bad = ps.filter(x => missingOf(x).length).length;
+    const ps = peopleOf(p.id), nn = ps.filter(x => x.role==="NN" && !x.left).length, pend = KB.configured ? ps.filter(needSend).length : ps.filter(x => !x.exported).length, bad = ps.filter(x => missingOf(x).length).length;
     const meta = [p.ba ? "BA "+p.ba : "", p.dept, p.discharge ? "Ra viện "+isoToVn(p.discharge) : "Vào "+isoToVn(p.admit)].filter(Boolean).join(" · ");
     const hit = matchInfo[p.id];
     return '<button type="button" class="item'+(fresh===p.id?' fresh':'')+'" data-p="'+p.id+'"><span style="min-width:0"><div class="nm">'+esc(p.name||"(chưa có tên bệnh nhân)")+'</div><div class="mt">'+esc(meta)+'</div>'+
       (hit ? '<div class="match">'+(hit.role==="BN"?"Bệnh nhân: ":"Người nhà: ")+esc(hit.name)+'</div>' : '')+'</span>'+
       '<span class="stack"><span class="badge'+(p.discharge?' gray':'')+'">'+nn+' người nhà</span>'+
-      (bad ? '<span class="badge bad">Thiếu '+bad+'</span>' : (pend ? '<span class="badge warn">Chưa nộp '+pend+'</span>' : (ps.length ? '<span class="badge ok">Đã nộp</span>' : '')))+'</span></button>';
+      (bad ? '<span class="badge bad">Thiếu '+bad+'</span>' : (pend ? '<span class="badge warn">'+(KB.configured?'Chưa gửi ':'Chưa nộp ')+pend+'</span>' : (ps.length ? '<span class="badge ok">'+(KB.configured?'Đã gửi':'Đã nộp')+'</span>' : '')))+'</span></button>';
   }).join("") + '</div>';
   fresh = null;
 }
@@ -10692,8 +10720,10 @@ function renderPatient(p){
       const st = x.left ? '<span class="badge gray">Đã về '+isoToVn(x.left).slice(0,5)+'</span>' : (m.length ? '<span class="badge bad">Thiếu '+m.length+'</span>' : (x.addrNote ? '<span class="badge warn">Xem địa chỉ</span>' : ''));
       return '<button type="button" class="item p3'+(fresh===x.id?' fresh':'')+'" data-x="'+x.id+'"><span class="role '+x.role+'">'+(x.role==="BN"?"BN":"NHÀ")+'</span>'+
         '<span style="min-width:0"><div class="nm">'+esc(x.name||"(chưa có tên)")+(x.kind==="NNN"?' 🌐':'')+'</div><div class="mt">'+esc((x.kind==="NNN"?x.passport:x.docNo)||"—")+' · '+esc(x.dob||"—")+'</div></span>'+
-        '<span class="stack">'+st+(x.exported ? '<span class="badge ok">Đã nộp</span>' : '<span class="badge warn">Chưa nộp</span>')+'</span></button>';
+        '<span class="stack">'+st+(() => { const [c,t] = sysState(x); return '<span class="badge '+c+'">'+t+'</span>'; })()+'</span></button>';
     }).join("")+'</div>' : '<div class="empty" style="padding:22px"><span>Bấm “Quét CCCD” ở dưới. Thẻ đầu tiên là bệnh nhân, các thẻ sau là người nhà. Có thể đổi ngay trên màn hình camera.</span></div>')+
+    (KB.configured ? (() => { const s1 = ps.filter(needSend).length, s2 = ps.filter(needExtend).length, s3 = ps.filter(needCheckout).length;
+      return (s1||s2||s3) ? '<div class="btns">'+(s1?'<button class="btn primary" type="button" id="kbSend">Gửi lên hệ thống ('+s1+')</button>':'')+(s2?'<button class="btn" type="button" id="kbExt">Gia hạn trên hệ thống ('+s2+')</button>':'')+(s3?'<button class="btn" type="button" id="kbOut">Trả phòng trên hệ thống ('+s3+')</button>':'')+'</div>' : ''; })() : '')+
     '<div class="btns">'+
       '<button class="btn" type="button" id="addNNN">+ Người nước ngoài</button>'+
       '<button class="btn" type="button" id="addVN">+ Nhập tay</button>'+
@@ -10717,6 +10747,9 @@ $("pview").addEventListener("click", e => {
   if (id === "addNNN"){ const x = newPerson(p, peopleOf(p.id).some(y=>y.role==="BN") ? "NN" : "BN", "NNN"); render(); openPerson(x.id); }
   if (id === "addVN"){ const x = newPerson(p, peopleOf(p.id).some(y=>y.role==="BN") ? "NN" : "BN", "VN"); render(); openPerson(x.id); }
   if (id === "dischargeBtn") openDischarge(p);
+  if (id === "kbSend") kbtt("send", peopleOf(p.id).filter(needSend).map(x => x.id));
+  if (id === "kbExt") kbtt("extend", peopleOf(p.id).filter(needExtend).map(x => x.id));
+  if (id === "kbOut") kbtt("checkout", peopleOf(p.id).filter(needCheckout).map(x => x.id));
   if (id === "undoOut"){ p.discharge = ""; peopleOf(p.id).forEach(x => { x.left = ""; }); save(); render(); toast("Đã hủy xuất viện"); }
   if (id === "delP"){
     if (e.target.dataset.c !== "1"){ e.target.dataset.c = "1"; e.target.textContent = "Bấm lần nữa để xóa"; return; }
@@ -10728,7 +10761,8 @@ function openDischarge(p){
   openSheet("Xuất viện", '<label class="f" for="dDate">Ngày xuất viện<input id="dDate" type="date" value="'+today(0)+'"></label>'+
     '<div class="raw">Cả nhóm ('+ps.length+' người) sẽ được ghi ngày về. Danh sách cần trả phòng trên hệ thống:<br>'+ps.map(x => '• '+esc(x.name)+' ('+esc(x.kind==="NNN"?x.passport:x.docNo)+')').join("<br>")+'</div>'+
     '<div class="btns"><button class="btn primary" type="button" id="dOk">Xác nhận xuất viện</button></div>', sh => {
-      sh.querySelector("#dOk").onclick = () => { const d = sh.querySelector("#dDate").value || today(0); p.discharge = d; ps.forEach(x => { if (!x.left) x.left = d; x.leave = d; }); save(); closeSheet(); render(); toast("Đã xuất viện "+(p.name||"")); };
+      sh.querySelector("#dOk").onclick = () => { const d = sh.querySelector("#dDate").value || today(0); p.discharge = d; ps.forEach(x => { if (!x.left) x.left = d; x.leave = d; }); save(); closeSheet(); render(); toast("Đã xuất viện "+(p.name||""));
+        if (KB.configured){ const ids = ps.filter(needCheckout).map(x => x.id); if (ids.length) setTimeout(() => kbtt("checkout", ids), 300); } };
     });
 }
 
@@ -10774,7 +10808,11 @@ function openPerson(id){
   }
   body += '</div>'+
     (x.rawAddr ? '<div class="raw">Địa chỉ trên thẻ: '+esc(x.rawAddr)+(x.issue?' · Ngày cấp '+esc(x.issue):'')+'</div>' : '')+
-    '<div class="raw">Ghi chú trong file: '+esc(noteFor(x))+'</div>'+
+    '<div class="raw">Ghi chú gửi kèm: '+esc(noteFor(x))+'</div>'+
+    (KB.configured ? (() => { const st = S.status[x.id]||{}; const [c,t] = sysState(x);
+      return '<div class="raw"><b>Hệ thống lưu trú:</b> <span class="badge '+c+'">'+t+'</span>'+(st.at?' · gửi lúc '+new Date(st.at).toLocaleString("vi-VN")+(st.by?' bởi '+esc(st.by):''):'')+(st.out?' · trả phòng '+new Date(st.out).toLocaleString("vi-VN"):'')+
+        (st.msg ? '<div class="hint bad">'+esc(st.msg)+'</div>' : '')+(st.outMsg ? '<div class="hint bad">Trả phòng: '+esc(st.outMsg)+'</div>' : '')+
+        '<div class="btns" style="margin-top:8px">'+(needSend(x)?'<button class="btn primary" type="button" id="kx_send">'+(st.st==="err"?'Gửi lại':'Gửi lên hệ thống')+'</button>':'')+(needExtend(x)?'<button class="btn" type="button" id="kx_extend">Gia hạn đến '+isoToVn(x.leave)+'</button>':'')+(needCheckout(x)||(st.st==="ok"&&!st.out&&x.left)?'<button class="btn" type="button" id="kx_checkout">Trả phòng trên hệ thống</button>':'')+'</div></div>'; })() : '')+
     '<div class="btns">'+(x.exported ? '<button class="btn" type="button" id="unexp">Đánh dấu chưa nộp</button>' : '')+'<button class="btn danger" type="button" id="delX">Xóa người này</button><button class="btn primary" type="button" data-close>Xong</button></div>';
   openSheet((x.kind==="NNN" ? "Người nước ngoài" : "Công dân Việt Nam"), body, sh => {
     sh.onchange = e => {
@@ -10792,6 +10830,8 @@ function openPerson(id){
       if (rb){ x.role = rb.dataset.role; if (x.kind==="VN"){ x.reason = x.role==="BN" ? S.settings.reasonBN : S.settings.reasonNN; x.reasonText = x.role==="BN" ? "" : S.settings.reasonNNText; }
         if (x.role === "BN" && p && !p.name && x.name){ p.name = x.name; }
         save(); render(); const t = sh.scrollTop; openPerson(x.id); $("sheet").scrollTop = t; return; }
+      const km = /^kx_(send|extend|checkout)$/.exec(e.target.id||"");
+      if (km){ kbtt(km[1], [x.id]).then(() => { if (!$("sheetBg").hidden) openPerson(x.id); }); return; }
       if (e.target.id === "unexp"){ x.exported = ""; save(); render(); openPerson(x.id); return; }
       if (e.target.id === "delX"){
         if (e.target.dataset.c !== "1"){ e.target.dataset.c = "1"; e.target.textContent = "Bấm lần nữa để xóa"; return; }
@@ -11002,6 +11042,8 @@ $("setBtn").onclick = () => {
     '<label class="check"><input id="sKNN" type="checkbox"'+(s.keepNNN?' checked':'')+'> Mẫu nước ngoài: giữ dòng [TEST] SAMPLE (dữ liệu từ dòng 4)</label>'+
     '<div class="sec">Máy quét QR cầm tay / dán chuỗi</div>'+
     '<input id="qrText" type="text" autocomplete="off" placeholder="Mở hồ sơ bệnh nhân trước, rồi quét vào đây" aria-label="Chuỗi QR">'+
+    '<div class="sec">Hệ thống lưu trú Bộ Công An</div>'+
+    '<div class="raw" id="kbBox" style="margin-top:0">'+(KB.configured ? 'Đã cấu hình tài khoản'+(KB.demo?' (môi trường DEMO)':'')+'. <button class="btn" type="button" id="kbCheck" style="min-height:34px;padding:4px 10px">Kiểm tra kết nối</button><div id="kbRes"></div>' : 'Chưa kết nối. Quản trị viên nhập tài khoản cơ sở lưu trú vào Cloudflare (KBTT_USER, KBTT_PASS) để app gửi thẳng lên hệ thống. Trong lúc chưa kết nối, dùng nút Xuất file Excel.')+'</div>'+
     '<div class="sec">Tài khoản</div>'+
     '<div class="urow"><span><b>'+esc(ME.name||ME.username)+'</b><div class="mt">'+esc(ME.username)+(ME.role==="admin"?" · quản trị":"")+'</div></span><button class="btn" id="logout" type="button">Đăng xuất</button></div>'+
     '<div class="grid" style="margin-top:8px"><label class="f" for="pwOld">Mật khẩu cũ<input id="pwOld" type="password" autocomplete="current-password"></label><label class="f" for="pwNew">Mật khẩu mới<input id="pwNew" type="password" autocomplete="new-password"></label></div>'+
@@ -11033,6 +11075,7 @@ $("setBtn").onclick = () => {
         const t = e.target;
         try {
           if (t.id === "logout"){ await apiCall("/api/logout", {method:"POST", body:"{}"}).catch(()=>{}); try { localStorage.removeItem(cacheKey); localStorage.removeItem(KEY+":lastUser"); } catch(_){} location.reload(); return; }
+          if (t.id === "kbCheck"){ sh.querySelector("#kbRes").textContent = "Đang kiểm tra…"; const d = await apiCall("/api/kbtt/status?check=1"); sh.querySelector("#kbRes").innerHTML = d.ok ? '<span class="badge ok">Kết nối tốt</span> Mã CSLT '+esc(d.info&&d.info.CsltId)+' · tỉnh '+esc(d.info&&d.info.MaTTCuaCslt)+' · phường/xã '+esc(d.info&&d.info.MaPxCuaCslt) : '<span class="hint bad">'+esc(d.error||"Lỗi")+'</span>'; return; }
           if (t.id === "pwBtn"){ await apiCall("/api/password", {method:"POST", body:JSON.stringify({old:sh.querySelector("#pwOld").value, password:sh.querySelector("#pwNew").value})}); toast("Đã đổi mật khẩu"); sh.querySelector("#pwOld").value = sh.querySelector("#pwNew").value = ""; return; }
           if (t.id === "nuBtn"){ await apiCall("/api/users", {method:"POST", body:JSON.stringify({name:sh.querySelector("#nuName").value, username:sh.querySelector("#nuUser").value, password:sh.querySelector("#nuPass").value, role:sh.querySelector("#nuRole").value})}); toast("Đã thêm nhân viên"); ["#nuName","#nuUser","#nuPass"].forEach(q => sh.querySelector(q).value = ""); loadUsers(); return; }
           if (t.dataset.reset){ const pw = Math.random().toString(36).slice(2,6) + Math.random().toString(36).slice(2,6); await apiCall("/api/users/"+t.dataset.reset, {method:"POST", body:JSON.stringify({password:pw})}); t.textContent = "MK mới: "+pw; return; }
@@ -11082,7 +11125,7 @@ async function push(){
       chunk.forEach(r => r.deleted ? synced.delete(r.id) : synced.set(r.id, r._j));
     }
     online = true; setSync("ok");
-    try { localStorage.setItem(cacheKey, JSON.stringify({patients:S.patients, people:S.people, synced:[...synced], lastSync})); } catch(e){}
+    try { localStorage.setItem(cacheKey, JSON.stringify({patients:S.patients, people:S.people, status:S.status, synced:[...synced], lastSync})); } catch(e){}
   } catch(e){ if (e.message !== "401"){ online = false; setSync("off"); setTimeout(schedulePush, 8000); } }
   finally { pushing = false; }
 }
@@ -11093,6 +11136,7 @@ async function pull(){
     let changed = false;
     const loc = localRecords();
     for (const r of d.records){
+      if (r.type === "status"){ const k = r.id.slice(1); if (r.deleted) delete S.status[k]; else S.status[k] = r.data; changed = true; continue; }
       const cur = loc.get(r.id);
       const dirty = cur && JSON.stringify(cur.data) !== synced.get(r.id);
       if (dirty) continue;
@@ -11105,7 +11149,7 @@ async function pull(){
       changed = true;
     }
     lastSync = d.now; online = true;
-    if (changed){ S.patients.sort((a,b) => (b.ct||0)-(a.ct||0)); try { localStorage.setItem(cacheKey, JSON.stringify({patients:S.patients, people:S.people, synced:[...synced], lastSync})); } catch(e){} if (!$("cam").hidden) {} else render(); }
+    if (changed){ S.patients.sort((a,b) => (b.ct||0)-(a.ct||0)); try { localStorage.setItem(cacheKey, JSON.stringify({patients:S.patients, people:S.people, status:S.status, synced:[...synced], lastSync})); } catch(e){} if (!$("cam").hidden) {} else render(); }
     setSync(pushing || [...localRecords()].some(([id,r]) => synced.get(id) !== JSON.stringify(r.data)) ? "pend" : "ok");
   } catch(e){ if (e.message !== "401"){ online = false; setSync("off"); } }
   finally { pulling = false; }
@@ -11137,11 +11181,12 @@ function showLogin(msg, setup){
 }
 async function startApp(user){
   ME = user; try { localStorage.setItem(KEY+":lastUser", JSON.stringify(user)); } catch(e){} cacheKey = KEY + ":data:" + user.username;
-  S.patients = []; S.people = []; synced = new Map(); lastSync = 0;
-  try { const c = JSON.parse(localStorage.getItem(cacheKey)||"null"); if (c){ S.patients = c.patients||[]; S.people = c.people||[]; synced = new Map(c.synced||[]); lastSync = c.lastSync||0; } } catch(e){}
+  S.patients = []; S.people = []; S.status = {}; synced = new Map(); lastSync = 0;
+  try { const c = JSON.parse(localStorage.getItem(cacheKey)||"null"); if (c){ S.patients = c.patients||[]; S.people = c.people||[]; S.status = c.status||{}; synced = new Map(c.synced||[]); lastSync = c.lastSync||0; } } catch(e){}
   migrateOld();
   $("auth").hidden = true; $("app").hidden = false;
   render(); await pull(); push();
+  apiCall("/api/kbtt/status").then(d => { KB = d; render(); }).catch(()=>{});
 }
 async function boot(){
   try {

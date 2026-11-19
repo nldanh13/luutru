@@ -1,4 +1,5 @@
-// Máy chủ "Lưu trú bệnh viện": đăng nhập theo nhân viên + đồng bộ hồ sơ giữa các máy.
+// Máy chủ "Lưu trú bệnh viện": đăng nhập theo nhân viên + đồng bộ hồ sơ giữa các máy + gửi khai báo lên hệ thống KBTT.
+import { kbttConfigured, getToken, nationalities, run } from "./kbtt.js";
 const SESSION_DAYS = 30;
 const enc = new TextEncoder();
 
@@ -100,6 +101,35 @@ async function api(req, env, url) {
     }
     if (stmts.length) await env.DB.batch(stmts);
     return json({ ok: true, now, saved: stmts.length });
+  }
+
+  if (p === "/api/kbtt/status" && m === "GET") {
+    if (!kbttConfigured(env)) return json({ configured: false });
+    const demo = !!env.KBTT_BASE && !/bocongan\.gov\.vn/.test(env.KBTT_BASE);
+    if (url.searchParams.get("check") !== "1") return json({ configured: true, demo });
+    try { const t = await getToken(env, true); return json({ configured: true, demo, ok: true, info: t.info }); }
+    catch (e) { return json({ configured: true, demo, ok: false, error: String(e.message || e) }); }
+  }
+  if (p === "/api/kbtt/qt" && m === "GET") {
+    try { return json({ list: await nationalities(env) }); } catch (e) { return err(String(e.message || e), 502); }
+  }
+  const km = /^\/api\/kbtt\/(send|checkout|extend)$/.exec(p);
+  if (km && m === "POST") {
+    if (!kbttConfigured(env)) return err("Chưa cấu hình tài khoản hệ thống lưu trú (KBTT_USER / KBTT_PASS)", 400);
+    const b = await body(req);
+    const ids = (Array.isArray(b.ids) ? b.ids : []).filter(i => typeof i === "string").slice(0, 60);
+    if (!ids.length) return err("Không có ai để gửi");
+    const q = (list) => env.DB.prepare(`SELECT id, type, data, deleted FROM records WHERE id IN (${list.map(() => "?").join(",")})`).bind(...list).all();
+    const ppl = (await q(ids)).results.filter(r => r.type === "person" && !r.deleted).map(r => JSON.parse(r.data));
+    if (!ppl.length) return err("Dữ liệu chưa đồng bộ lên máy chủ, đợi vài giây rồi thử lại");
+    const pids = [...new Set(ppl.map(x => x.pid))];
+    const pats = new Map((await q(pids)).results.filter(r => !r.deleted).map(r => { const d = JSON.parse(r.data); return [d.id, d]; }));
+    const sts = new Map((await q(ppl.map(x => "s" + x.id))).results.map(r => [r.id.slice(1), JSON.parse(r.data)]));
+    const results = await run(env, km[1], ppl, pats, sts);
+    const now = Date.now();
+    await env.DB.batch(results.map(r => env.DB.prepare("INSERT INTO records (id, type, data, deleted, updated_at, updated_by) VALUES (?, 'status', ?, 0, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at, updated_by = excluded.updated_by")
+      .bind("s" + r.id, JSON.stringify(Object.assign(r.status, { by: me.name || me.username })), now, me.id)));
+    return json({ results: results.map(r => ({ id: r.id, ok: r.ok, error: r.error || "", status: r.status })) });
   }
 
   if (p.startsWith("/api/users")) {
