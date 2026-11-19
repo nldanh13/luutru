@@ -38,6 +38,16 @@ main{padding:10px max(12px,env(safe-area-inset-right,0px)) calc(110px + env(safe
 .item:first-child{border-top:0}
 .item:active{background:var(--brand-soft)}
 .item.p3{grid-template-columns:auto minmax(0,1fr) auto}
+.prow{display:flex;align-items:center;border-top:1px solid var(--line)}
+.prow:first-child{border-top:0}
+.prow>.item{border-top:0;flex:1;min-width:0}
+.vebtn{margin-right:10px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-weight:700;font-size:.8rem;padding:7px 12px;cursor:pointer;white-space:nowrap}
+.vebtn:active{background:var(--brand-soft)}
+details.hist{margin-top:8px}
+details.hist>summary{cursor:pointer;font-size:.8rem;color:var(--muted);padding:8px 2px;list-style:none}
+details.hist>summary::before{content:'▸ '}
+details.hist[open]>summary::before{content:'▾ '}
+#asList{margin-top:8px;max-height:46vh;overflow:auto}
 .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mt{font-size:.8rem;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .match{font-size:.78rem;color:var(--brand);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -147,6 +157,10 @@ input[type=text],input[type=date],input[type=tel],input[type=number],select{font
     <span id="exportLbl">Xuất file</span>
   </button>
   <button class="fab" id="fab" type="button"></button>
+  <button class="side" id="quickBtn" type="button" aria-label="Quét người nhà đến">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>
+    Người nhà đến
+  </button>
   <label class="side" id="pickWrap" aria-label="Đọc mã QR từ ảnh">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 8"/></svg>
     Từ ảnh
@@ -10539,7 +10553,7 @@ async function buildNNN(list, keep){
 /* ================= Dữ liệu ================= */
 function today(off, base){ const d = base ? new Date(base+"T00:00:00") : new Date(); d.setDate(d.getDate()+(off||0)); const z=n=>String(n).padStart(2,"0"); return d.getFullYear()+"-"+z(d.getMonth()+1)+"-"+z(d.getDate()); }
 function isoToVn(s){ const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(s||""); return m ? m[3]+"/"+m[2]+"/"+m[1] : ""; }
-const DEF = { stayDays:7, reasonBN:"18 - Chữa bệnh", reasonNN:"20 - Mục đích khác", reasonNNText:"Nuôi bệnh", keepVN:true, keepNNN:true, cam:"", zoom:0 };
+const DEF = { stayDays:7, reasonBN:"18 - Chữa bệnh", reasonNN:"20 - Mục đích khác", reasonNNText:"Nuôi bệnh", keepVN:true, keepNNN:true, cam:"", zoom:0, autoSend:true };
 let S = { settings:Object.assign({}, DEF), patients:[], people:[], status:{} };
 let KB = { configured:false };
 try { const st = JSON.parse(localStorage.getItem(KEY+":settings")||"null"); if (st) S.settings = Object.assign({}, DEF, st); } catch(e){}
@@ -10608,6 +10622,23 @@ function sysState(x){
 const needSend = (x) => KB.configured && !x.left && (S.status[x.id]||{}).st !== "ok";
 const needExtend = (x) => { const st = S.status[x.id]||{}; return KB.configured && st.st === "ok" && !st.out && !x.left && x.leave && st.leave && x.leave > st.leave; };
 const needCheckout = (x) => { const st = S.status[x.id]||{}; return KB.configured && st.st === "ok" && !st.out && !!x.left; };
+const ended = (x) => !!x.left || !!(S.status[x.id]||{}).out;
+const byNewest = (a,b) => (b.ct||0) - (a.ct||0);
+/* Tự gửi: chỉ những người vừa quét / sửa / bấm Về trên máy này */
+const autoQ = new Set(); let autoT = 0;
+function scheduleAuto(ms){ if (!KB.configured || !S.settings.autoSend || !autoQ.size) return; clearTimeout(autoT); autoT = setTimeout(runAuto, ms==null ? 2500 : ms); }
+async function runAuto(){
+  if (!KB.configured || !S.settings.autoSend) return;
+  if (kbBusy || !$("sheetBg").hidden){ scheduleAuto(3000); return; }
+  const mine = S.people.filter(x => autoQ.has(x.id)); autoQ.clear();
+  const out = mine.filter(needCheckout).map(x => x.id);
+  if (out.length) await kbtt("checkout", out);
+  const send = mine.filter(x => needSend(x) && !missingOf(x).length && (S.status[x.id]||{}).st !== "err" && x.arrive >= today(-1)).map(x => x.id);
+  if (send.length) await kbtt("send", send);
+  const ext = mine.filter(needExtend).map(x => x.id);
+  if (ext.length) await kbtt("extend", ext);
+}
+function markLeft(x, d){ x.left = d; x.leave = d; autoQ.add(x.id); }
 let kbBusy = false;
 async function kbtt(action, ids){
   if (!ids.length || kbBusy) return;
@@ -10638,7 +10669,9 @@ function openSheet(title, html, onMount){
   $("sheet").innerHTML = '<div class="grab"></div><h2><span>'+esc(title)+'</span><button class="icon-btn" data-close type="button" aria-label="Đóng">'+X_ICON+'</button></h2>'+html;
   $("sheetBg").hidden = false; $("sheet").scrollTop = 0; if (onMount) onMount($("sheet"));
 }
-function closeSheet(){ $("sheetBg").hidden = true; $("sheet").innerHTML = ""; }
+function closeSheet(){ $("sheetBg").hidden = true; $("sheet").innerHTML = "";
+  if (assignOpen){ assignOpen = false; assignQ.length = 0; } else if (assignQ.length) setTimeout(openAssign, 200);
+  scheduleAuto(1200); }
 $("sheetBg").addEventListener("click", e => { if (e.target === $("sheetBg") || e.target.closest("[data-close]")) closeSheet(); });
 const SCAN_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>';
 const PLUS_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
@@ -10655,13 +10688,13 @@ function render(){
   if (view === "home"){
     $("title").textContent = "Lưu trú bệnh viện";
     $("fab").innerHTML = PLUS_ICON + "Bệnh nhân"; $("fab").setAttribute("aria-label","Thêm bệnh nhân");
-    $("pickWrap").hidden = true;
+    $("pickWrap").hidden = true; $("quickBtn").hidden = false;
     renderHome();
   } else {
     const p = pat(curPid); if (!p){ go("home"); return; }
     $("title").textContent = p.name || "Bệnh nhân mới";
     $("fab").innerHTML = SCAN_ICON + "Quét CCCD"; $("fab").setAttribute("aria-label","Quét CCCD");
-    $("pickWrap").hidden = false;
+    $("pickWrap").hidden = false; $("quickBtn").hidden = true;
     renderPatient(p);
   }
 }
@@ -10705,7 +10738,18 @@ $("backBtn").onclick = () => go("home");
 /* ================= Trang bệnh nhân ================= */
 function renderPatient(p){
   const ps = peopleOf(p.id).sort((a,b) => (a.role===b.role ? (a.ct||0)-(b.ct||0) : (a.role==="BN"?-1:1)));
+  const here = p.discharge ? ps : ps.filter(x => !ended(x)), gone = p.discharge ? [] : ps.filter(ended).sort((a,b) => (b.left||"").localeCompare(a.left||"") || byNewest(a,b));
   const f = (k,l,ctl,cls) => '<label class="f'+(cls?' '+cls:'')+'" for="p_'+k+'">'+l+ctl.replace(/^<(input|select)(?=[ >])/,'<$1 id="p_'+k+'" data-pk="'+k+'"')+'</label>';
+  const row = (x) => {
+      const m = missingOf(x);
+      const st = x.left ? '<span class="badge gray">Đã về '+isoToVn(x.left).slice(0,5)+'</span>' : (m.length ? '<span class="badge bad">Thiếu '+m.length+'</span>' : (x.addrNote ? '<span class="badge warn">Xem địa chỉ</span>' : ''));
+      const span = x.left ? isoToVn(x.arrive).slice(0,5)+' → '+isoToVn(x.left).slice(0,5) : 'từ '+isoToVn(x.arrive).slice(0,5);
+      const btn = '<button type="button" class="item p3'+(fresh===x.id?' fresh':'')+'" data-x="'+x.id+'"><span class="role '+x.role+'">'+(x.role==="BN"?"BN":"NHÀ")+'</span>'+
+        '<span style="min-width:0"><div class="nm">'+esc(x.name||"(chưa có tên)")+(x.kind==="NNN"?' 🌐':'')+'</div><div class="mt">'+esc((x.kind==="NNN"?x.passport:x.docNo)||"—")+' · '+esc(span)+'</div></span>'+
+        '<span class="stack">'+st+(() => { const [c,t] = sysState(x); return '<span class="badge '+c+'">'+t+'</span>'; })()+'</span></button>';
+      const ve = (!p.discharge && x.role === "NN" && !ended(x)) ? '<button type="button" class="vebtn" data-ve="'+x.id+'">Về</button>' : '';
+      return '<div class="prow">'+btn+ve+'</div>';
+  };
   $("pview").innerHTML =
     '<div class="card"><div class="grid">'+
       f("name","Tên bệnh nhân",'<input type="text" value="'+esc(p.name)+'" placeholder="Quét CCCD bệnh nhân để tự điền">',"full")+
@@ -10714,14 +10758,9 @@ function renderPatient(p){
       f("admit","Ngày nhập viện",'<input type="date" value="'+esc(p.admit)+'">')+
       (p.discharge ? f("discharge","Ngày xuất viện",'<input type="date" value="'+esc(p.discharge)+'">') : '<div></div>')+
     '</div></div>'+
-    '<div class="sec"><span>Người lưu trú ('+ps.length+')</span></div>'+
-    (ps.length ? '<div class="list">'+ps.map(x => {
-      const m = missingOf(x);
-      const st = x.left ? '<span class="badge gray">Đã về '+isoToVn(x.left).slice(0,5)+'</span>' : (m.length ? '<span class="badge bad">Thiếu '+m.length+'</span>' : (x.addrNote ? '<span class="badge warn">Xem địa chỉ</span>' : ''));
-      return '<button type="button" class="item p3'+(fresh===x.id?' fresh':'')+'" data-x="'+x.id+'"><span class="role '+x.role+'">'+(x.role==="BN"?"BN":"NHÀ")+'</span>'+
-        '<span style="min-width:0"><div class="nm">'+esc(x.name||"(chưa có tên)")+(x.kind==="NNN"?' 🌐':'')+'</div><div class="mt">'+esc((x.kind==="NNN"?x.passport:x.docNo)||"—")+' · '+esc(x.dob||"—")+'</div></span>'+
-        '<span class="stack">'+st+(() => { const [c,t] = sysState(x); return '<span class="badge '+c+'">'+t+'</span>'; })()+'</span></button>';
-    }).join("")+'</div>' : '<div class="empty" style="padding:22px"><span>Bấm “Quét CCCD” ở dưới. Thẻ đầu tiên là bệnh nhân, các thẻ sau là người nhà. Có thể đổi ngay trên màn hình camera.</span></div>')+
+    '<div class="sec"><span>'+(p.discharge ? 'Người lưu trú ('+ps.length+')' : 'Đang ở ('+here.length+')')+'</span></div>'+
+    (here.length ? '<div class="list">'+here.map(row).join("")+'</div>' : (ps.length ? '<div class="empty" style="padding:16px"><span>Hiện không có ai đang ở. Người nhà lên lại thì bấm “Quét CCCD”, app tự tạo lượt nuôi mới.</span></div>' : '<div class="empty" style="padding:22px"><span>Bấm “Quét CCCD” ở dưới. Thẻ đầu tiên là bệnh nhân, các thẻ sau là người nhà. Có thể đổi ngay trên màn hình camera.</span></div>'))+
+    (gone.length ? '<details class="hist"'+(histOpen[p.id]?' open':'')+' data-hist="'+p.id+'"><summary>Đã về / lượt nuôi trước ('+gone.length+')</summary><div class="list">'+gone.map(row).join("")+'</div></details>' : '')+
     (KB.configured ? (() => { const s1 = ps.filter(needSend).length, s2 = ps.filter(needExtend).length, s3 = ps.filter(needCheckout).length;
       return (s1||s2||s3) ? '<div class="btns">'+(s1?'<button class="btn primary" type="button" id="kbSend">Gửi lên hệ thống ('+s1+')</button>':'')+(s2?'<button class="btn" type="button" id="kbExt">Gia hạn trên hệ thống ('+s2+')</button>':'')+(s3?'<button class="btn" type="button" id="kbOut">Trả phòng trên hệ thống ('+s3+')</button>':'')+'</div>' : ''; })() : '')+
     '<div class="btns">'+
@@ -10736,11 +10775,18 @@ function renderPatient(p){
 }
 $("pview").addEventListener("change", e => {
   const k = e.target.dataset.pk; if (!k) return;
-  const p = pat(curPid); p[k] = e.target.value; save();
+  const p = pat(curPid); const oldVal = p[k]; p[k] = e.target.value; save();
   if (k === "name") $("title").textContent = p.name || "Bệnh nhân mới";
-  if (k === "discharge"){ peopleOf(p.id).forEach(x => { x.left = p.discharge; x.leave = p.discharge; }); save(); render(); }
+  if (k === "discharge"){ peopleOf(p.id).forEach(x => { if (!x.left || x.left === oldVal){ x.left = p.discharge; x.leave = p.discharge; } }); save(); render(); }
 });
+const histOpen = {};
+$("pview").addEventListener("toggle", e => { const d = e.target.closest && e.target.closest("[data-hist]"); if (d) histOpen[d.dataset.hist] = d.open; }, true);
 $("pview").addEventListener("click", e => {
+  const ve = e.target.closest("[data-ve]");
+  if (ve){ const x = S.people.find(y => y.id === ve.dataset.ve); if (!x) return;
+    markLeft(x, today(0)); save(); render();
+    toast(x.name+" đã về hôm nay"+(KB.configured && S.settings.autoSend && (S.status[x.id]||{}).st === "ok" ? ", đang trả phòng trên hệ thống…" : ""));
+    scheduleAuto(600); return; }
   const b = e.target.closest("[data-x]"); if (b){ openPerson(b.dataset.x); return; }
   const p = pat(curPid); if (!p) return;
   const id = e.target.id;
@@ -10750,7 +10796,7 @@ $("pview").addEventListener("click", e => {
   if (id === "kbSend") kbtt("send", peopleOf(p.id).filter(needSend).map(x => x.id));
   if (id === "kbExt") kbtt("extend", peopleOf(p.id).filter(needExtend).map(x => x.id));
   if (id === "kbOut") kbtt("checkout", peopleOf(p.id).filter(needCheckout).map(x => x.id));
-  if (id === "undoOut"){ p.discharge = ""; peopleOf(p.id).forEach(x => { x.left = ""; }); save(); render(); toast("Đã hủy xuất viện"); }
+  if (id === "undoOut"){ const d = p.discharge; p.discharge = ""; peopleOf(p.id).forEach(x => { if (x.left === d && !(S.status[x.id]||{}).out) x.left = ""; }); save(); render(); toast("Đã hủy xuất viện"); }
   if (id === "delP"){
     if (e.target.dataset.c !== "1"){ e.target.dataset.c = "1"; e.target.textContent = "Bấm lần nữa để xóa"; return; }
     S.people = S.people.filter(x => x.pid !== p.id); S.patients = S.patients.filter(y => y.id !== p.id); save(); go("home"); toast("Đã xóa hồ sơ");
@@ -10761,7 +10807,7 @@ function openDischarge(p){
   openSheet("Xuất viện", '<label class="f" for="dDate">Ngày xuất viện<input id="dDate" type="date" value="'+today(0)+'"></label>'+
     '<div class="raw">Cả nhóm ('+ps.length+' người) sẽ được ghi ngày về. Danh sách cần trả phòng trên hệ thống:<br>'+ps.map(x => '• '+esc(x.name)+' ('+esc(x.kind==="NNN"?x.passport:x.docNo)+')').join("<br>")+'</div>'+
     '<div class="btns"><button class="btn primary" type="button" id="dOk">Xác nhận xuất viện</button></div>', sh => {
-      sh.querySelector("#dOk").onclick = () => { const d = sh.querySelector("#dDate").value || today(0); p.discharge = d; ps.forEach(x => { if (!x.left) x.left = d; x.leave = d; }); save(); closeSheet(); render(); toast("Đã xuất viện "+(p.name||""));
+      sh.querySelector("#dOk").onclick = () => { const d = sh.querySelector("#dDate").value || today(0); p.discharge = d; ps.forEach(x => { if (!x.left){ x.left = d; x.leave = d; } }); save(); closeSheet(); render(); toast("Đã xuất viện "+(p.name||""));
         if (KB.configured){ const ids = ps.filter(needCheckout).map(x => x.id); if (ids.length) setTimeout(() => kbtt("checkout", ids), 300); } };
     });
 }
@@ -10817,7 +10863,7 @@ function openPerson(id){
   openSheet((x.kind==="NNN" ? "Người nước ngoài" : "Công dân Việt Nam"), body, sh => {
     sh.onchange = e => {
       const k = e.target.dataset.k; if (!k) return;
-      x[k] = e.target.value;
+      x[k] = e.target.value; autoQ.add(x.id);
       if (k === "name") x.name = x.name.toUpperCase();
       if (k === "passport") x.passport = x.passport.toUpperCase();
       if (k === "prov") x.ward = "";
@@ -10847,13 +10893,17 @@ function addScan(text, role){
   const p = pat(curPid); if (!p) return {ok:false, msg:"Chưa chọn bệnh nhân"};
   const q = parseQR(text);
   if (!q) return {ok:false, msg:"Mã này không phải QR căn cước"};
-  const dupHere = peopleOf(p.id).find(x => x.docNo === q.docNo);
-  if (dupHere) return {ok:false, dup:true, msg:"Đã có: "+dupHere.name};
-  const other = S.people.find(x => x.docNo === q.docNo && !x.left && x.pid !== p.id);
-  const x = newPerson(p, role, "VN", q);
-  if (role === "BN" && !p.name){ p.name = x.name; save(); }
+  const prevHere = peopleOf(p.id).filter(x => x.docNo === q.docNo).sort(byNewest)[0];
+  if (prevHere && !ended(prevHere)) return {ok:false, dup:true, msg:"Đang ở: "+prevHere.name};
+  const other = S.people.find(x => x.docNo === q.docNo && !ended(x) && x.pid !== p.id);
+  const x = newPerson(p, prevHere ? prevHere.role : role, "VN", q);
+  if (prevHere){ if (prevHere.phone) x.phone = prevHere.phone; if (prevHere.room) x.room = prevHere.room;
+    if (prevHere.rawAddr === x.rawAddr && prevHere.ward){ x.prov = prevHere.prov; x.ward = prevHere.ward; x.detail = prevHere.detail; x.addrNote = prevHere.addrNote; } save(); }
+  if (x.role === "BN" && !p.name){ p.name = x.name; save(); }
+  autoQ.add(x.id); scheduleAuto();
   fresh = x.id; render();
-  return {ok:true, x, warn: other ? "Lưu ý: người này cũng đang ở hồ sơ BN "+((pat(other.pid)||{}).name||"khác") : ""};
+  const n = peopleOf(p.id).filter(y => y.docNo === q.docNo).length;
+  return {ok:true, x, again: !!prevHere, warn: (prevHere ? "lượt nuôi thứ "+n : "") + (other ? (prevHere?" · ":"")+"Lưu ý: cũng đang ở hồ sơ BN "+((pat(other.pid)||{}).name||"khác") : "")};
 }
 async function handleFiles(files){
   let ok=0, fail=0;
@@ -10867,7 +10917,51 @@ async function handleFiles(files){
 }
 $("pick").addEventListener("change", e => { const f=[...e.target.files]; e.target.value=""; if (f.length) handleFiles(f); });
 
+let camMode = "patient";
+const assignQ = []; let assignOpen = false;
+$("quickBtn").onclick = () => { camMode = "auto"; camRole = "NN";
+  try { actx = actx || new (window.AudioContext||window.webkitAudioContext)(); if (actx.state==="suspended") actx.resume(); } catch(e){}
+  openCamera(); };
+/* Quét ở màn hình chính: người quen tự vào đúng bệnh nhân, người mới thì hỏi sau khi đóng camera */
+function smartScan(text){
+  const q = parseQR(text); if (!q) return {ok:false, msg:"Mã này không phải QR căn cước"};
+  const prev = S.people.filter(x => x.docNo === q.docNo).sort(byNewest);
+  const hit = prev.find(x => { const pp = pat(x.pid); return pp && !pp.discharge; });
+  if (hit){
+    const pp = pat(hit.pid); const keep = curPid; curPid = pp.id;
+    const r = addScan(text, "NN"); curPid = keep;
+    if (r.ok) return Object.assign(r, {msg:"✓ "+r.x.name+" → BN "+(pp.name||"")+(r.again?" (lên lại)":"")});
+    return {ok:false, msg:r.msg+" · BN "+(pp.name||"")};
+  }
+  if (assignQ.some(a => a.docNo === q.docNo)) return {ok:false, msg:"Đã ghi nhận "+q.name};
+  assignQ.push(Object.assign({raw:text}, q));
+  return {ok:true, pending:true, x:{name:q.name, docNo:q.docNo}, msg:"Người mới: "+q.name+" · chọn bệnh nhân sau khi đóng camera"};
+}
+function openAssign(){
+  const q = assignQ[0]; if (!q){ assignOpen = false; return; }
+  assignOpen = true;
+  const act = S.patients.filter(p => !p.discharge);
+  const next = () => { assignQ.shift(); assignOpen = false; closeSheet(); render(); };
+  const put = (p, role) => { const keep = curPid; curPid = p.id; const r = addScan(q.raw, role); curPid = keep; toast(r.ok ? "Đã thêm "+q.name+" vào BN "+(p.name||q.name) : r.msg, !r.ok); };
+  openSheet("Người mới: "+q.name,
+    '<div class="raw" style="margin-top:0">'+esc(q.docNo)+' · '+esc(q.dob)+(assignQ.length>1?' · còn '+(assignQ.length-1)+' người nữa':'')+'</div>'+
+    '<div class="btns"><button class="btn primary" type="button" id="asNew">Là bệnh nhân mới</button><button class="btn" type="button" id="asSkip">Bỏ qua</button></div>'+
+    '<div class="sec">Hoặc là người nhà của bệnh nhân</div>'+
+    '<input id="asQ" type="text" autocomplete="off" placeholder="Tìm tên bệnh nhân, mã BA, khoa…" aria-label="Tìm bệnh nhân"><div class="list" id="asList"></div>', sh => {
+      const paint = () => { const n = norm(sh.querySelector("#asQ").value);
+        sh.querySelector("#asList").innerHTML = act.filter(p => !n || [p.name,p.ba,p.dept].some(v => norm(v).includes(n))).slice(0,40).map(p =>
+          '<button type="button" class="item" data-as="'+p.id+'"><span style="min-width:0"><div class="nm">'+esc(p.name||"(chưa có tên)")+'</div><div class="mt">'+esc([p.ba?"BA "+p.ba:"", p.dept, "Vào "+isoToVn(p.admit)].filter(Boolean).join(" · "))+'</div></span><span class="badge">'+peopleOf(p.id).filter(x=>x.role==="NN"&&!ended(x)).length+' người nhà</span></button>').join("") || '<div class="mt" style="padding:12px">Không có bệnh nhân phù hợp</div>'; };
+      paint(); sh.querySelector("#asQ").oninput = paint;
+      sh.onclick = e => {
+        const a = e.target.closest("[data-as]");
+        if (a){ const p = pat(a.dataset.as); if (p) put(p, "NN"); next(); return; }
+        if (e.target.id === "asNew"){ const p = newPatient(); put(p, "BN"); next(); return; }
+        if (e.target.id === "asSkip"){ next(); return; }
+      };
+    });
+}
 $("fab").onclick = () => {
+  camMode = "patient";
   if (view === "home"){ const p = newPatient(); fresh = p.id; go("patient", p.id); camRole = "BN"; openCamera(); return; }
   const p = pat(curPid); camRole = p && peopleOf(p.id).some(y=>y.role==="BN") ? "NN" : "BN";
   try { actx = actx || new (window.AudioContext||window.webkitAudioContext)(); if (actx.state==="suspended") actx.resume(); } catch(e){}
@@ -10878,7 +10972,7 @@ $("fab").onclick = () => {
 let stream=null, track=null, scanning=false, busy=false, lastTick=0, cooldownUntil=0, lastText="", backCams=[];
 const recent = [];
 const cvs = document.createElement("canvas"); const cctx = cvs.getContext("2d", {willReadFrequently:true});
-function paintRole(){ [...$("camRole").children].forEach(b => b.classList.toggle("on", b.dataset.r === camRole)); $("camMsg").textContent = camRole==="BN" ? "Quét CCCD của bệnh nhân" : "Quét CCCD của người nhà"; }
+function paintRole(){ $("camRole").hidden = camMode === "auto"; [...$("camRole").children].forEach(b => b.classList.toggle("on", b.dataset.r === camRole)); $("camMsg").textContent = camMode === "auto" ? "Quét CCCD người nhà vừa đến. App tự tìm bệnh nhân của họ." : (camRole==="BN" ? "Quét CCCD của bệnh nhân" : "Quét CCCD của người nhà"); }
 $("camRole").onclick = e => { const b = e.target.closest("[data-r]"); if (b){ camRole = b.dataset.r; paintRole(); } };
 function pickMainBack(list){
   const back = list.filter(d => /back|rear|environment|sau/i.test(d.label));
@@ -10911,7 +11005,7 @@ function setupZoom(){
 async function openCamera(){
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ toast("Máy này không mở được camera. Dùng nút “Từ ảnh”.", true); return; }
   const p = pat(curPid);
-  $("cam").hidden = false; $("camTitle").textContent = p && p.name ? p.name : "Bệnh nhân mới"; recent.length = 0; $("recent").innerHTML = ""; paintRole();
+  $("cam").hidden = false; $("camTitle").textContent = camMode === "auto" ? "Người nhà đến" : (p && p.name ? p.name : "Bệnh nhân mới"); recent.length = 0; $("recent").innerHTML = ""; paintRole();
   try { await startStream(S.settings.cam || null); }
   catch(e){ try { S.settings.cam=""; await startStream(null); } catch(e2){ $("cam").hidden = true; toast("Không mở được camera. Hãy cho phép quyền camera trong cài đặt trình duyệt.", true); return; } }
   try {
@@ -10923,7 +11017,7 @@ async function openCamera(){
   } catch(e){}
   scanning = true; schedule();
 }
-function closeCamera(){ scanning = false; stopStream(); $("cam").hidden = true; render(); }
+function closeCamera(){ scanning = false; stopStream(); $("cam").hidden = true; render(); if (camMode === "auto" && assignQ.length && !assignOpen) openAssign(); else scheduleAuto(800); }
 function schedule(){ if (!scanning) return; const v = $("video"); if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(tick); else requestAnimationFrame(tick); }
 async function tick(){
   if (!scanning) return;
@@ -10950,9 +11044,17 @@ async function tick(){
 function onScan(text){
   if (text === lastText && performance.now() < cooldownUntil + 1500) return;
   lastText = text;
-  const r = addScan(text, camRole);
+  const r = camMode === "auto" ? smartScan(text) : addScan(text, camRole);
   const aim = $("aim");
-  if (r.ok){
+  if (r.ok && camMode === "auto"){
+    cooldownUntil = performance.now() + 900;
+    aim.classList.add("hit"); setTimeout(()=>aim.classList.remove("hit"), 700);
+    try { navigator.vibrate && navigator.vibrate(r.pending ? [60,60,60] : 80); } catch(e){}
+    beep();
+    recent.unshift(r.msg.replace(/^✓ /,"")); recent.length = Math.min(recent.length, 3);
+    $("recent").innerHTML = recent.map(t => '<div>'+esc(t)+'</div>').join("");
+    $("camMsg").textContent = r.msg + (r.warn && !r.pending ? " · "+r.warn : "");
+  } else if (r.ok){
     cooldownUntil = performance.now() + 900;
     aim.classList.add("hit"); setTimeout(()=>aim.classList.remove("hit"), 700);
     try { navigator.vibrate && navigator.vibrate(80); } catch(e){}
@@ -10960,7 +11062,7 @@ function onScan(text){
     recent.unshift((camRole==="BN"?"BN · ":"Nhà · ")+r.x.name+" · "+r.x.docNo); recent.length = Math.min(recent.length, 3);
     $("recent").innerHTML = recent.map(t => '<div>'+esc(t)+'</div>').join("");
     const p = pat(curPid); $("camTitle").textContent = p.name || "Bệnh nhân mới";
-    $("camMsg").textContent = "✓ " + r.x.name + (r.warn ? " · " + r.warn : "");
+    $("camMsg").textContent = "✓ " + r.x.name + (r.again ? " (lên lại)" : "") + (r.warn ? " · " + r.warn : "");
     if (camRole === "BN"){ camRole = "NN"; setTimeout(paintRole, 1400); }
   } else { cooldownUntil = performance.now() + 600; $("camMsg").textContent = r.msg; }
 }
@@ -11043,6 +11145,7 @@ $("setBtn").onclick = () => {
     '<div class="sec">Máy quét QR cầm tay / dán chuỗi</div>'+
     '<input id="qrText" type="text" autocomplete="off" placeholder="Mở hồ sơ bệnh nhân trước, rồi quét vào đây" aria-label="Chuỗi QR">'+
     '<div class="sec">Hệ thống lưu trú Bộ Công An</div>'+
+    (KB.configured ? '<label class="check"><input id="sAuto" type="checkbox"'+(s.autoSend?' checked':'')+'> Tự gửi lên hệ thống ngay khi quét xong, tự trả phòng khi bấm “Về”</label>' : '')+
     '<div class="raw" id="kbBox" style="margin-top:0">'+(KB.configured ? 'Đã cấu hình tài khoản'+(KB.demo?' (môi trường DEMO)':'')+'. <button class="btn" type="button" id="kbCheck" style="min-height:34px;padding:4px 10px">Kiểm tra kết nối</button><div id="kbRes"></div>' : 'Chưa kết nối. Quản trị viên nhập tài khoản cơ sở lưu trú vào Cloudflare (KBTT_USER, KBTT_PASS) để app gửi thẳng lên hệ thống. Trong lúc chưa kết nối, dùng nút Xuất file Excel.')+'</div>'+
     '<div class="sec">Tài khoản</div>'+
     '<div class="urow"><span><b>'+esc(ME.name||ME.username)+'</b><div class="mt">'+esc(ME.username)+(ME.role==="admin"?" · quản trị":"")+'</div></span><button class="btn" id="logout" type="button">Đăng xuất</button></div>'+
@@ -11059,11 +11162,11 @@ $("setBtn").onclick = () => {
       sh.onchange = e => {
         const id = e.target.id; if (!/^s/.test(id)) return;
         if (id==="sBN") s.reasonBN = e.target.value; if (id==="sNN") s.reasonNN = e.target.value; if (id==="sNNT") s.reasonNNText = e.target.value;
-        if (id==="sDays") s.stayDays = Math.max(1, +e.target.value||7); if (id==="sKVN") s.keepVN = e.target.checked; if (id==="sKNN") s.keepNNN = e.target.checked;
+        if (id==="sDays") s.stayDays = Math.max(1, +e.target.value||7); if (id==="sKVN") s.keepVN = e.target.checked; if (id==="sKNN") s.keepNNN = e.target.checked; if (id==="sAuto") s.autoSend = e.target.checked;
         save();
       };
       sh.querySelector("#qrText").onkeydown = e => { if (e.key !== "Enter") return; e.preventDefault();
-        if (view !== "patient"){ toast("Hãy mở hồ sơ bệnh nhân trước.", true); return; }
+        if (view !== "patient"){ const r = smartScan(e.target.value); toast(r.msg, !r.ok); if (r.ok){ e.target.value = ""; if (r.pending){ closeSheet(); } } return; }
         const p = pat(curPid); const r = addScan(e.target.value, peopleOf(p.id).filter(y=>y.role==="BN").length && peopleOf(p.id).length ? "NN" : "BN");
         toast(r.ok ? "Đã thêm "+r.x.name : r.msg, !r.ok); if (r.ok) e.target.value = ""; };
       const loadUsers = async () => { const box = sh.querySelector("#ulist"); if (!box) return;
