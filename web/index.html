@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><script>(function(){try{var w=innerWidth,sw=screen.width;if(matchMedia("(pointer:coarse)").matches&&sw&&w>sw*1.3){document.documentElement.style.zoom=(w/sw).toFixed(3);}}catch(e){}})();</script>
 <title>Lưu trú bệnh viện</title>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#1f4e8c">
@@ -10678,7 +10678,10 @@ const PLUS_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 
 /* ================= Trang chủ: danh sách bệnh nhân ================= */
 let view = "home", curPid = null, filter = "in", fresh = null;
-function go(v, pid){ view = v; curPid = pid || null; render(); window.scrollTo(0,0); }
+function isEmptyPatient(p){ return p && !p.name && !p.ba && !p.dept && !p.discharge && !peopleOf(p.id).length; }
+function go(v, pid){
+  if (curPid && curPid !== pid){ const old = pat(curPid); if (isEmptyPatient(old)){ S.patients = S.patients.filter(y => y.id !== old.id); save(); } }
+  view = v; curPid = pid || null; render(); window.scrollTo(0,0); }
 function render(){
   $("loading").hidden = true;
   $("home").hidden = view !== "home"; $("pview").hidden = view !== "patient";
