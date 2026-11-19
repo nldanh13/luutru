@@ -83,6 +83,7 @@ async function api(req, env, url) {
   if (p === "/api/sync" && m === "GET") {
     const since = Math.max(0, +url.searchParams.get("since") || 0);
     const now = Date.now();
+    try { await env.DB.prepare("UPDATE users SET last_seen = ? WHERE id = ? AND last_seen < ?").bind(now, me.id, now - 60000).run(); } catch {}
     const rs = await env.DB.prepare("SELECT id, type, data, deleted, updated_at FROM records WHERE updated_at > ? AND updated_at <= ? ORDER BY updated_at LIMIT 5000").bind(since, now).all();
     return json({ now, records: rs.results.map(r => ({ id: r.id, type: r.type, deleted: !!r.deleted, updated_at: r.updated_at, data: r.deleted ? null : JSON.parse(r.data) })) });
   }
@@ -135,7 +136,7 @@ async function api(req, env, url) {
   if (p.startsWith("/api/users")) {
     if (me.role !== "admin") return err("Chỉ quản trị viên", 403);
     if (p === "/api/users" && m === "GET") {
-      const rs = await env.DB.prepare("SELECT id, username, name, role, active, created_at FROM users ORDER BY id").all();
+      const rs = await env.DB.prepare("SELECT id, username, name, role, active, created_at, last_seen FROM users ORDER BY id").all();
       return json({ users: rs.results });
     }
     if (p === "/api/users" && m === "POST") {
@@ -157,6 +158,11 @@ async function api(req, env, url) {
         const salt = randHex(16), hash = await hashPw(b.password, salt);
         await env.DB.prepare("UPDATE users SET pass_hash = ?, salt = ? WHERE id = ?").bind(hash, salt, id).run();
         await env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(id).run();
+      }
+      if (typeof b.name === "string" && b.name.trim()) await env.DB.prepare("UPDATE users SET name = ? WHERE id = ?").bind(b.name.trim().slice(0, 80), id).run();
+      if (b.role === "admin" || b.role === "staff") {
+        if (id === me.id && b.role !== "admin") return err("Không thể tự bỏ quyền quản trị của mình");
+        await env.DB.prepare("UPDATE users SET role = ? WHERE id = ?").bind(b.role, id).run();
       }
       if (typeof b.active === "boolean") {
         if (id === me.id && !b.active) return err("Không thể tự khóa tài khoản của mình");
