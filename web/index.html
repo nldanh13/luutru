@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><script>(function(){try{var w=innerWidth,sw=screen.width;if(matchMedia("(pointer:coarse)").matches&&sw&&w>sw*1.3){document.documentElement.style.zoom=(w/sw).toFixed(3);document.documentElement.className+=" mob";}}catch(e){}})();</script>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><script>(function(){ var de=document.documentElement; function fit(){  try{   var pref=""; try{pref=localStorage.getItem("luutru-layout")||"";}catch(e){}   var ua=navigator.userAgent||"", touch=(navigator.maxTouchPoints||0)>0||matchMedia("(pointer:coarse)").matches;   var w=innerWidth, sw=screen.width||w, sh=screen.height||sw, smin=Math.min(sw,sh);   var vv=window.visualViewport, sc=vv&&vv.scale?vv.scale:1;   var phoneUA=/Android|iPhone|iPod|Mobile/i.test(ua)||!!(navigator.userAgentData&&navigator.userAgentData.mobile);   var deskModePhone=touch&&(/X11|Linux x86_64/.test(ua)||(/Macintosh/.test(ua)&&smin<700));   var isPhone=pref==="mobile"?true:(pref==="desktop"?false:(phoneUA||deskModePhone||(touch&&smin<700)));   de.style.zoom=""; de.classList.remove("mob");   if(!isPhone) return;   var dev=sw<w*0.8?sw:(sc<0.9?Math.round(w*sc):((deskModePhone&&w>=900)?412:w));   var z=(w>dev*1.15&&dev>=280)?w/dev:1;   if(z>1) de.style.zoom=z.toFixed(3);   if(w/z<900||pref==="mobile") de.classList.add("mob");  }catch(e){} } fit(); addEventListener("load",fit); addEventListener("resize",function(){clearTimeout(fit.t);fit.t=setTimeout(fit,200);}); window.__fit=fit;})();</script>
 <title>Lưu trú bệnh viện</title>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#0b5cad">
@@ -10889,6 +10889,7 @@ const fmtDT = (t) => { if (!t) return ""; const d = new Date(t), z = n => String
 const dm = (iso) => isoToVn(iso).slice(0,5);
 const initials = (n) => String(n||"?").trim().split(/\s+/).slice(-2).map(w => w[0]||"").join("").toUpperCase();
 function badgeHTML(x){ const [c,t] = sysState(x); return '<span class="badge '+c+'">'+t+'</span>'; }
+function layoutPref(){ try { return localStorage.getItem("luutru-layout")||""; } catch(e){ return ""; } }
 function applyTheme(){ document.documentElement.dataset.theme = S.settings.theme || "light"; }
 
 /* ================= Điều hướng ================= */
@@ -11229,6 +11230,7 @@ function settingsHTML(){
       srow("Số ngày ở dự kiến", "Ngày đi dự kiến = ngày đến + số ngày này (tối đa 30 khi gia hạn)", '<input id="sDays" type="number" min="1" max="90" value="'+esc(s.stayDays)+'">')+
     '</div></div>'+
     '<div class="card"><div class="hd"><div><h2>Giao diện</h2></div></div><div class="bd">'+
+      srow("Kiểu hiển thị", "Tự động nhận điện thoại hay máy tính. Chọn tay nếu máy hiển thị chưa đúng (chỉ áp dụng cho máy này)", '<div class="seg" style="display:flex">'+[["","Tự động"],["mobile","Điện thoại"],["desktop","Máy tính"]].map(o => '<button type="button" data-layout-v="'+o[0]+'" class="'+(layoutPref()===o[0]?"on":"")+'" style="flex:1">'+o[1]+'</button>').join("")+'</div>')+
       srow("Chế độ màu", "", '<div class="seg" style="display:flex"><button type="button" data-theme-v="light" class="'+((s.theme||"light")==="light"?"on":"")+'" style="flex:1">Sáng</button><button type="button" data-theme-v="dark" class="'+(s.theme==="dark"?"on":"")+'" style="flex:1">Tối</button><button type="button" data-theme-v="auto" class="'+(s.theme==="auto"?"on":"")+'" style="flex:1">Theo máy</button></div>')+
     '</div></div>'+
     '<div class="card"><div class="hd"><div><h2>Mẫu Excel</h2><div class="desc">Dùng khi nộp bằng file thay vì gửi thẳng</div></div></div><div class="bd">'+
@@ -11320,6 +11322,7 @@ function mountSettings(){
     const t = e.target.closest("button"); if (!t) return;
     try {
       if (t.dataset.themeV){ s.theme = t.dataset.themeV; save(); render(); return; }
+      if (t.dataset.layoutV !== undefined){ try { if (t.dataset.layoutV) localStorage.setItem("luutru-layout", t.dataset.layoutV); else localStorage.removeItem("luutru-layout"); } catch(_){} if (window.__fit) window.__fit(); render(); return; }
       if (t.id === "logout"){ await apiCall("/api/logout", {method:"POST", body:"{}"}).catch(()=>{}); try { localStorage.removeItem(cacheKey); localStorage.removeItem(KEY+":lastUser"); } catch(_){} location.hash = ""; location.reload(); return; }
       if (t.id === "kbCheck"){ $("kbRes").textContent = "Đang kiểm tra…"; const d = await apiCall("/api/kbtt/status?check=1"); $("kbRes").innerHTML = d.ok ? '<span class="badge ok">Kết nối tốt</span> Mã CSLT '+esc(d.info&&d.info.CsltId)+' · tỉnh '+esc(d.info&&d.info.MaTTCuaCslt)+' · phường/xã '+esc(d.info&&d.info.MaPxCuaCslt) : '<span class="hint bad">'+esc(d.error||"Lỗi")+'</span>'; return; }
       if (t.id === "nuOpen"){ userSheet(null); return; }
